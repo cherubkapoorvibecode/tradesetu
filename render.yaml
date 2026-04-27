@@ -1,0 +1,26 @@
+# Render Blueprint — one-click deploy from a GitHub repo.
+# In the Render dashboard: New → Blueprint → connect this repo.
+# Render reads this file, creates the service, and prompts you for the
+# `sync: false` env vars (your API keys).
+
+services:
+  - type: web
+    name: tradesetu
+    runtime: node
+    plan: free            # 750 hrs/mo, sleeps after 15 min idle, free TLS
+    region: oregon        # change if you prefer (frankfurt, singapore, etc.)
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      # Secrets — Render will prompt for these on first deploy.
+      # `sync: false` means "don't store in render.yaml, ask via dashboard".
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: SARVAM_API_KEY
+        sync: false
+      - key: NOTION_API_KEY
+        sync: false
+      - key: NOTION_PAGE_ID
+        sync: false
