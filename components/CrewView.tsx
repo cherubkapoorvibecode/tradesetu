@@ -40,7 +40,7 @@ const AGENT_META: Record<Exclude<AgentName, "synthesizer">, {
 }> = {
   classifier: {
     label: "Tariff Code",
-    tagline: "Finding your HS classification",
+    tagline: "HS classification",
     color: "text-indigo-600",
     bg: "bg-indigo-50",
     ring: "ring-indigo-200",
@@ -48,7 +48,7 @@ const AGENT_META: Record<Exclude<AgentName, "synthesizer">, {
   },
   compliance: {
     label: "Compliance",
-    tagline: "Mapping every regulatory requirement",
+    tagline: "Rules and documents",
     color: "text-emerald-600",
     bg: "bg-emerald-50",
     ring: "ring-emerald-200",
@@ -56,7 +56,7 @@ const AGENT_META: Record<Exclude<AgentName, "synthesizer">, {
   },
   cost: {
     label: "Landed Cost",
-    tagline: "Breaking down duties, fees, and FTAs",
+    tagline: "Duties, fees, and FTAs",
     color: "text-amber-600",
     bg: "bg-amber-50",
     ring: "ring-amber-200",
@@ -64,7 +64,7 @@ const AGENT_META: Record<Exclude<AgentName, "synthesizer">, {
   },
   risk: {
     label: "Risk Check",
-    tagline: "Surfacing red flags before you ship",
+    tagline: "Holds and red flags",
     color: "text-rose-600",
     bg: "bg-rose-50",
     ring: "ring-rose-200",
@@ -171,34 +171,19 @@ const ThinkingShimmer: React.FC = () => (
 const SourceChips: React.FC<{ sources?: { uri: string; title: string }[] }> = ({ sources }) => {
   if (!sources || sources.length === 0) return null;
   return (
-    <div className="mt-3 pt-3 border-t border-slate-50">
-      <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
-        🌐 Grounded · {sources.length} source{sources.length === 1 ? "" : "s"}
-      </p>
-      <div className="flex flex-wrap gap-1">
-        {sources.slice(0, 4).map((s, i) => {
-          let host = "";
-          try { host = new URL(s.uri).hostname.replace(/^www\./, ""); } catch { host = "source"; }
-          return (
-            <a
-              key={i}
-              href={s.uri}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={s.title}
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-slate-50 hover:bg-blue-50 text-slate-500 hover:text-blue-600 rounded text-[10px] font-mono transition-colors max-w-[140px] truncate"
-            >
-              {host}
-            </a>
-          );
-        })}
-        {sources.length > 4 && (
-          <span className="text-[10px] text-slate-400 self-center">+{sources.length - 4}</span>
-        )}
-      </div>
+    <div className="mt-3 pt-3 border-t border-slate-50 flex items-center justify-between">
+      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+        Grounded
+      </span>
+      <span className="text-[10px] font-semibold text-slate-400">
+        {sources.length} source{sources.length === 1 ? "" : "s"}
+      </span>
     </div>
   );
 };
+
+const compactText = (text: string, max = 86) =>
+  text.length > max ? `${text.slice(0, max).trim()}...` : text;
 
 // ─── Per-agent output rendering (specialist-specific summary card) ──
 
@@ -208,7 +193,7 @@ const AgentOutput: React.FC<{ agent: Exclude<AgentName, "synthesizer">; output: 
     return (
       <div className="space-y-2">
         <div className="text-xl font-black text-slate-900 font-mono">{o.hsCode}</div>
-        <p className="text-xs text-slate-500 leading-relaxed line-clamp-2">{o.description}</p>
+        <p className="text-xs text-slate-500 leading-relaxed line-clamp-2">{compactText(o.description)}</p>
         <div className="flex items-center gap-2 pt-1">
           <span className="px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded-md text-[10px] font-bold">{o.dutyRate}</span>
           <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
@@ -235,7 +220,7 @@ const AgentOutput: React.FC<{ agent: Exclude<AgentName, "synthesizer">; output: 
           <span className="px-2 py-0.5 bg-emerald-50 text-emerald-600 rounded-md text-[10px] font-bold">⏱ {o.timeline}</span>
         </div>
         <p className="text-xs text-slate-500 leading-relaxed line-clamp-2 pt-1">
-          <span className="font-semibold text-slate-700">Bottleneck:</span> {o.bottleneck}
+          <span className="font-semibold text-slate-700">Bottleneck:</span> {compactText(o.bottleneck, 76)}
         </p>
         <SourceChips sources={o.sources} />
       </div>
@@ -245,7 +230,9 @@ const AgentOutput: React.FC<{ agent: Exclude<AgentName, "synthesizer">; output: 
     const o = output as CostOutput;
     return (
       <div className="space-y-2">
-        <div className="text-xl font-black text-slate-900">{o.estimatedTotalCostPerUnit}</div>
+        <div className="text-lg font-black text-slate-900 leading-tight line-clamp-3">
+          {compactText(o.estimatedTotalCostPerUnit, 96)}
+        </div>
         <p className="text-[11px] text-slate-500">duty: <span className="font-bold text-slate-700 font-mono">{o.estimatedDutyRate}</span></p>
         <div className="flex items-center gap-1.5 flex-wrap pt-1">
           <span className="px-2 py-0.5 bg-amber-50 text-amber-600 rounded-md text-[10px] font-bold">{o.lineItems.length} line items</span>
@@ -329,14 +316,14 @@ const SynthesizerBanner: React.FC<{ output: SynthesizerOutput }> = ({ output }) 
 
 const CrewView: React.FC<CrewViewProps> = ({ input, onComplete, onCancel, languagePref }) => {
   const t = useTranslations({
-    title:    "Simplify Export Compliance for your Business",
-    subtitle: "We're checking every angle of your shipment. This usually takes 20–30 seconds.",
+    title:    "Checking Your Export Plan",
+    subtitle: "Tariff, compliance, cost, and risk checks run as separate specialist agents.",
     back:     "Cancel",
     waiting:  "Getting started…",
     finalCta: "View your full compliance plan",
     finalSub: "Detailed checklist, documents, costs, and risks merged into one workspace",
-    phase1:   "Step 1 · Identifying your tariff code",
-    phase2:   "Step 2 · Checking requirements, costs, and risks",
+    phase1:   "Step 1 · Tariff code",
+    phase2:   "Step 2 · Parallel specialist checks",
   }, languagePref);
 
   type AgentState = { status: AgentStatus; output?: any; error?: string };
@@ -443,7 +430,7 @@ const CrewView: React.FC<CrewViewProps> = ({ input, onComplete, onCancel, langua
           error={agents.classifier.error}
         />
         <div className="hidden md:flex items-center justify-center text-xs text-slate-400 italic px-4">
-          ↓ Using your tariff code to guide the next checks ↓
+          Tariff code guides the next checks
         </div>
       </div>
 

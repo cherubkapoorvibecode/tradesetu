@@ -34,7 +34,9 @@ Rules:
 - Cite actual recent refusal reasons or enforcement actions when found via search
 - "portAdvice" = which US port of entry tends to clear this product type fastest, vs which to avoid (e.g., "LA/Long Beach has highest textile inspection rate; Norfolk averages 30% faster clearance for furniture")
 - "commonRejections" = top 3-5 ACTUAL reasons CBP/FDA reject this product category from this origin (search recent refusal data)
-- "topRiskScore" = 0-100 (0 = trivial, 100 = will almost certainly be held)
+- "topRiskScore" = 0-100 using this rubric: base commodity risk + origin-specific history + first-shipment penalty + number/severity of operational flags
+- Do NOT use a default score like 75, 80, or 85. A spice powder, cotton t-shirt, toy, cosmetic, and RF device should not all receive the same score.
+- Calibrate the score: Low = 0-39, Medium = 40-69, High = 70-100. Set "overallRiskLevel" from the score, not from a gut feeling.
 - Each flag's "mitigation" must be concrete — e.g., "Get COA from NABL-accredited lab" not "ensure quality"
 - Distinguish between regulatory risks (handled by Compliance Agent) and OPERATIONAL risks (your focus)
 - Be EXHAUSTIVE: a typical first-time shipment has 5-8 distinct risk flags`;
@@ -53,6 +55,69 @@ const SCHEMA_DESC = `{
   "portAdvice": "string — port-specific recommendations",
   "commonRejections": ["string — actual top rejection reasons"]
 }`;
+
+function clampScore(score: number): number {
+  return Math.max(5, Math.min(98, Math.round(score)));
+}
+
+function levelFromScore(score: number): RiskOutput["overallRiskLevel"] {
+  if (score >= 70) return "High";
+  if (score >= 40) return "Medium";
+  return "Low";
+}
+
+function categoryBaseRisk(input: CrewInput): number {
+  const text = `${input.category} ${input.productName} ${input.description} ${input.materials || ""}`.toLowerCase();
+  if (/food|spice|powder|ingredient|supplement|beverage|tea|coffee|turmeric|herb/.test(text)) return 42;
+  if (/cosmetic|skin|cream|soap|shampoo|lotion/.test(text)) return 36;
+  if (/toy|child|children|infant|toddler|baby/.test(text)) return 38;
+  if (/electronic|battery|wireless|bluetooth|wifi|rf|charger/.test(text)) return 34;
+  if (/apparel|textile|cotton|garment|shirt|fabric/.test(text)) return 24;
+  return 28;
+}
+
+function deriveRiskScore(input: CrewInput, output: Omit<RiskOutput, "sources">): number {
+  const severityPoints = (output.flags || []).reduce((sum, flag) => {
+    if (flag.severity === "High") return sum + 12;
+    if (flag.severity === "Medium") return sum + 7;
+    return sum + 3;
+  }, 0);
+
+  const rejectionPoints = Math.min((output.commonRejections || []).length * 3, 12);
+  const firstShipmentPoints = input.isFirstShipment ? 7 : 0;
+  const routeText = `${input.countryOfManufacture} ${input.destinationCountry}`.toLowerCase();
+  const routePoints = routeText.includes("india") && /united states|usa|us/.test(routeText) ? 4 : 0;
+  const flagCountAdjustment = (output.flags || []).length < 3 ? -8 : 0;
+
+  return clampScore(
+    categoryBaseRisk(input) +
+    severityPoints +
+    rejectionPoints +
+    firstShipmentPoints +
+    routePoints +
+    flagCountAdjustment,
+  );
+}
+
+function calibrateRiskOutput(
+  input: CrewInput,
+  output: Omit<RiskOutput, "sources">,
+): Omit<RiskOutput, "sources"> {
+  const rawScore = Number(output.topRiskScore);
+  const derived = deriveRiskScore(input, output);
+  const genericAnchor = [75, 80, 85].includes(Math.round(rawScore));
+  const invalidScore = !Number.isFinite(rawScore) || rawScore < 0 || rawScore > 100;
+
+  const topRiskScore = invalidScore || genericAnchor
+    ? derived
+    : clampScore(Math.round((rawScore * 0.65) + (derived * 0.35)));
+
+  return {
+    ...output,
+    topRiskScore,
+    overallRiskLevel: levelFromScore(topRiskScore),
+  };
+}
 
 export async function runRiskAgent(
   input: CrewInput,
@@ -75,5 +140,5 @@ Description: ${classifierContext.description}
     enableSearch: true,
   });
 
-  return { ...parsed, sources };
+  return { ...calibrateRiskOutput(input, parsed), sources };
 }
