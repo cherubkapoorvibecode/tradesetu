@@ -152,7 +152,7 @@ const App: React.FC = () => {
         {/* Results View */}
         {view === 'results' && report && (
           <div className="px-6 py-12 md:py-20 min-h-[80vh]">
-             <ComplianceResults report={report} userInput={userInput} crewResult={crewResult} onReset={resetFlow} onReportUpdate={handleReportUpdate} onHsClassify={() => { setView('hs-classify'); window.scrollTo({ top: 0, behavior: 'smooth' }); }} onLabelGuard={() => { setView('label-automation'); window.scrollTo({ top: 0, behavior: 'smooth' }); }} languagePref={languagePref} />
+             <ComplianceResults report={report} userInput={userInput} crewResult={crewResult} onReset={resetFlow} onReportUpdate={handleReportUpdate} onLabelGuard={() => { setView('label-automation'); window.scrollTo({ top: 0, behavior: 'smooth' }); }} languagePref={languagePref} />
           </div>
         )}
 

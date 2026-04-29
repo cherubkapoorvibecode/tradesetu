@@ -18,7 +18,6 @@ interface Props {
   crewResult?: CrewResult | null;
   onReset: () => void;
   onReportUpdate: (report: ComplianceReport) => void;
-  onHsClassify?: () => void;
   onLabelGuard?: () => void;
   languagePref: LanguagePreference;
 }
@@ -33,7 +32,7 @@ const STATUS_STYLE: Record<ComplianceStatus, { color: string; bg: string; icon: 
 
 const STATUS_OPTIONS: ComplianceStatus[] = ["not_started", "in_progress", "completed", "not_applicable"];
 
-const ComplianceResults: React.FC<Props> = ({ report, userInput, crewResult, onReset, onReportUpdate, onHsClassify, onLabelGuard, languagePref }) => {
+const ComplianceResults: React.FC<Props> = ({ report, userInput, crewResult, onReset, onReportUpdate, onLabelGuard, languagePref }) => {
   const [progress, setProgress] = useState<ComplianceProgress>({});
   const [expandedItem, setExpandedItem] = useState<number | null>(null);
   const [feedbackMap, setFeedbackMap] = useState<Record<string, { isPositive: boolean; reason?: FeedbackReason }>>({});
@@ -46,8 +45,6 @@ const ComplianceResults: React.FC<Props> = ({ report, userInput, crewResult, onR
     newCheck:     "New check",
     timeline:     "Timeline",
     bottleneck:   "Bottleneck",
-    getHsCode:    "Get HS Code for this product",
-    getHsSub:     "Find the right tariff classification and duty rates",
     whatToDo:     "What you need to do",
     documents:    "Documents to prepare",
     notRequired:  "Not required",
@@ -293,25 +290,6 @@ const ComplianceResults: React.FC<Props> = ({ report, userInput, crewResult, onR
             })}
           </div>
         </div>
-      )}
-
-      {/* Quick Actions */}
-      {onHsClassify && (
-        <button
-          onClick={onHsClassify}
-          className="w-full flex items-center justify-between px-5 py-4 bg-white rounded-xl border border-slate-100 hover:border-blue-200 hover:bg-blue-50/50 transition-all group"
-        >
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-indigo-100 flex items-center justify-center">
-              <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" /></svg>
-            </div>
-            <div className="text-left">
-              <p className="text-sm font-bold text-slate-900">{ui.getHsCode}</p>
-              <p className="text-xs text-slate-400">{ui.getHsSub}</p>
-            </div>
-          </div>
-          <svg className="w-4 h-4 text-slate-300 group-hover:text-blue-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
-        </button>
       )}
 
       {/* Action Checklist — THE primary view */}
