@@ -69,6 +69,9 @@ export default defineConfig({
           } else if (req.url === '/api/lead') {
             const { handleLeadRequest } = await import('./server/complianceHandler');
             handleLeadRequest(req, res);
+          } else if (req.url === '/api/notion-health') {
+            const { handleNotionHealthRequest } = await import('./server/complianceHandler');
+            handleNotionHealthRequest(req, res);
           } else if (req.url === '/api/sarvam/translate') {
             const { handleTranslateRequest } = await import('./server/sarvamService');
             handleTranslateRequest(req, res);

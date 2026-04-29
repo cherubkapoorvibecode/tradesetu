@@ -49,6 +49,7 @@ import {
   handleHsClassifyRequest,
   handleAggregateRequest,
   handleLeadRequest,
+  handleNotionHealthRequest,
 } from "./server/complianceHandler";
 import {
   handleTranslateRequest,
@@ -78,6 +79,8 @@ app.post("/api/events",            route(handleEventsRequest));
 app.post("/api/hs-classify",       route(handleHsClassifyRequest));
 app.post("/api/aggregate",         route(handleAggregateRequest));
 app.post("/api/lead",              route(handleLeadRequest));
+app.get("/api/notion-health",      route(handleNotionHealthRequest));
+app.post("/api/notion-health",     route(handleNotionHealthRequest));
 app.post("/api/sarvam/translate",  route(handleTranslateRequest));
 app.post("/api/sarvam/detect",     route(handleDetectRequest));
 app.post("/api/sarvam/tts",        route(handleTtsRequest));

@@ -2,7 +2,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import type { IncomingMessage, ServerResponse } from "http";
 import type { FeedbackEntry } from "../types";
-import { logFeedback, logProductFeedback, logEvent, logChatQuestion, logLead, aggregateFeedbackToBacklog, notifyFeedbackForAutoAggregate } from "./notionService";
+import { logFeedback, logProductFeedback, logEvent, logChatQuestion, logLead, aggregateFeedbackToBacklog, notifyFeedbackForAutoAggregate, getNotionLoopStatus } from "./notionService";
 
 // In-memory feedback store
 const feedbackStore: FeedbackEntry[] = [];
@@ -209,10 +209,11 @@ export async function handleFeedbackRequest(req: IncomingMessage, res: ServerRes
     feedbackStore.push(entry);
     console.log(`[Feedback] ${isPositive ? "👍" : "👎"} "${itemName}"${reason ? ` — ${reason}` : ""} (total: ${feedbackStore.length})`);
 
-    // Log to Notion (fire-and-forget)
-    logFeedback({ itemName, isPositive, reason, category, tradeRoute, sessionId }).catch(() => {});
-    // Trigger aggregation if enough new signal has piled up
-    notifyFeedbackForAutoAggregate();
+    // Log to Notion without blocking the user. Trigger aggregation only after
+    // the row exists, so the newest signal is included in the triage pass.
+    logFeedback({ itemName, isPositive, reason, category, tradeRoute, sessionId })
+      .then(() => notifyFeedbackForAutoAggregate())
+      .catch(() => {});
 
     sendJson(res, 200, { success: true, totalFeedback: feedbackStore.length });
   } catch (e: any) {
@@ -233,9 +234,9 @@ export async function handleProductFeedbackRequest(req: IncomingMessage, res: Se
     const { comment, rating, category, sessionId } = JSON.parse(body);
 
     console.log(`[Product Feedback] Rating: ${rating}/5 — "${comment?.slice(0, 50)}..."`);
-    logProductFeedback({ comment, rating, category, sessionId }).catch(() => {});
-    // Product-level feedback is a strong signal — count it too
-    notifyFeedbackForAutoAggregate();
+    logProductFeedback({ comment, rating, category, sessionId })
+      .then(() => notifyFeedbackForAutoAggregate())
+      .catch(() => {});
 
     sendJson(res, 200, { success: true });
   } catch (e: any) {
@@ -416,5 +417,22 @@ export async function handleAggregateRequest(req: IncomingMessage, res: ServerRe
   } catch (e: any) {
     console.error("Aggregate API error:", e);
     sendJson(res, 500, { error: e.message || "Failed to aggregate feedback" });
+  }
+}
+
+// ─── Notion Feedback Loop Health ───
+
+export async function handleNotionHealthRequest(req: IncomingMessage, res: ServerResponse) {
+  if (req.method !== "GET" && req.method !== "POST") {
+    return sendJson(res, 405, { error: "Method not allowed" });
+  }
+
+  try {
+    const status = await getNotionLoopStatus();
+    const ok = status.configured && status.initialized && Object.values(status.databases).every(Boolean);
+    sendJson(res, ok ? 200 : 503, { ok, ...status });
+  } catch (e: any) {
+    console.error("Notion health API error:", e);
+    sendJson(res, 500, { ok: false, error: e.message || "Failed to check Notion loop" });
   }
 }

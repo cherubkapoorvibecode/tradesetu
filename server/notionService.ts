@@ -6,12 +6,26 @@ const NOTION_VERSION = "2022-06-28";
 
 // Store DB IDs on globalThis so they survive Vite HMR reloads
 const g = globalThis as any;
-if (!g.__notionDbIds) g.__notionDbIds = { feedback: null, backlog: null, events: null, leads: null, initialized: false };
+if (!g.__notionDbIds) {
+  g.__notionDbIds = {
+    feedback: null,
+    backlog: null,
+    events: null,
+    leads: null,
+    initialized: false,
+    initPromise: null,
+    lastError: null,
+  };
+}
 
 function getFeedbackDbId(): string | null { return g.__notionDbIds.feedback; }
 function getBacklogDbId(): string | null { return g.__notionDbIds.backlog; }
 function getEventsDbId(): string | null { return g.__notionDbIds.events; }
 function getLeadsDbId(): string | null { return g.__notionDbIds.leads; }
+
+function hasNotionCredentials(): boolean {
+  return !!(process.env.NOTION_PAGE_ID && process.env.NOTION_API_KEY);
+}
 
 function getHeaders() {
   const key = process.env.NOTION_API_KEY;
@@ -224,33 +238,87 @@ export async function initNotion(): Promise<void> {
     console.log("[Notion] Already initialized, skipping");
     return;
   }
+  if (g.__notionDbIds.initPromise) {
+    await g.__notionDbIds.initPromise;
+    return;
+  }
 
   const pageId = process.env.NOTION_PAGE_ID;
   if (!pageId || !process.env.NOTION_API_KEY) {
+    g.__notionDbIds.lastError = "NOTION_PAGE_ID or NOTION_API_KEY missing";
     console.log("[Notion] No credentials, skipping initialization");
     return;
   }
 
-  try {
-    g.__notionDbIds.feedback = await findDatabase("Product Feedback") || await createFeedbackDb(pageId);
-    g.__notionDbIds.backlog = await findDatabase("Product Backlog") || await createBacklogDb(pageId);
-    g.__notionDbIds.events = await findDatabase("Analytics Events") || await createEventsDb(pageId);
-    g.__notionDbIds.leads = await findDatabase("Agent Consultation Requests") || await createLeadsDb(pageId);
+  g.__notionDbIds.initPromise = (async () => {
+    try {
+      g.__notionDbIds.feedback = await findDatabase("Product Feedback") || await createFeedbackDb(pageId);
+      g.__notionDbIds.backlog = await findDatabase("Product Backlog") || await createBacklogDb(pageId);
+      g.__notionDbIds.events = await findDatabase("Analytics Events") || await createEventsDb(pageId);
+      g.__notionDbIds.leads = await findDatabase("Agent Consultation Requests") || await createLeadsDb(pageId);
 
-    // Idempotent schema upgrade: ensure the "Rating" property exists on the
-    // Feedback DB for users whose DB predates the rating field. Notion accepts
-    // a PATCH /databases/:id with the same property definition as a no-op.
-    if (g.__notionDbIds.feedback) {
-      await notionFetch(`/databases/${g.__notionDbIds.feedback}`, "PATCH", {
-        properties: { "Rating": { number: { format: "number" } } },
-      }).catch((e: any) => console.warn("[Notion] Rating column upgrade skipped:", e.message));
+      // Idempotent schema upgrades. These keep older demo Notion workspaces
+      // compatible as the prototype evolves.
+      if (g.__notionDbIds.feedback) {
+        await notionFetch(`/databases/${g.__notionDbIds.feedback}`, "PATCH", {
+          properties: { "Rating": { number: { format: "number" } } },
+        }).catch((e: any) => console.warn("[Notion] Rating column upgrade skipped:", e.message));
+      }
+
+      g.__notionDbIds.initialized = true;
+      g.__notionDbIds.lastError = null;
+      console.log("[Notion] All databases ready:", {
+        feedback: !!g.__notionDbIds.feedback,
+        backlog: !!g.__notionDbIds.backlog,
+        events: !!g.__notionDbIds.events,
+        leads: !!g.__notionDbIds.leads,
+      });
+    } catch (e: any) {
+      g.__notionDbIds.lastError = e.message || "Notion initialization failed";
+      console.error("[Notion] Init failed:", e.message);
+    } finally {
+      g.__notionDbIds.initPromise = null;
     }
+  })();
 
-    g.__notionDbIds.initialized = true;
-    console.log("[Notion] All databases ready:", g.__notionDbIds);
-  } catch (e: any) {
-    console.error("[Notion] Init failed:", e.message);
+  await g.__notionDbIds.initPromise;
+}
+
+async function ensureNotionReady(caller: string): Promise<boolean> {
+  if (g.__notionDbIds.initialized) return true;
+  if (!hasNotionCredentials()) {
+    console.warn(`[Notion] ${caller} skipped: missing NOTION credentials`);
+    return false;
   }
+  await initNotion();
+  if (!g.__notionDbIds.initialized) {
+    console.warn(`[Notion] ${caller} skipped: initialization failed (${g.__notionDbIds.lastError || "unknown error"})`);
+    return false;
+  }
+  return true;
+}
+
+export async function getNotionLoopStatus(): Promise<{
+  configured: boolean;
+  initialized: boolean;
+  databases: Record<"feedback" | "backlog" | "events" | "leads", boolean>;
+  lastError: string | null;
+}> {
+  if (hasNotionCredentials() && !g.__notionDbIds.initialized) {
+    await initNotion();
+  }
+
+  return {
+    configured: hasNotionCredentials(),
+    initialized: !!g.__notionDbIds.initialized,
+    databases: {
+      feedback: !!getFeedbackDbId(),
+      backlog: !!getBacklogDbId(),
+      events: !!getEventsDbId(),
+      leads: !!getLeadsDbId(),
+    },
+    lastError: g.__notionDbIds.lastError || null,
+  };
 }
 
 // ─── Log Feedback to Notion ───
@@ -274,6 +342,7 @@ export async function logFeedback(data: {
   tradeRoute?: string;
   sessionId?: string;
 }): Promise<void> {
+  if (!(await ensureNotionReady("logFeedback"))) return;
   const dbId = getFeedbackDbId();
   if (!dbId) { console.warn("[Notion] feedbackDbId not set, skipping logFeedback"); return; }
 
@@ -307,6 +376,7 @@ export async function logProductFeedback(data: {
   category?: string;
   sessionId?: string;
 }): Promise<void> {
+  if (!(await ensureNotionReady("logProductFeedback"))) return;
   const dbId = getFeedbackDbId();
   if (!dbId) { console.warn("[Notion] feedbackDbId not set, skipping logProductFeedback"); return; }
 
@@ -336,6 +406,7 @@ export async function logEvent(data: {
   sessionId: string;
   properties: Record<string, any>;
 }): Promise<void> {
+  if (!(await ensureNotionReady("logEvent"))) return;
   const dbId = getEventsDbId();
   if (!dbId) { console.warn("[Notion] eventsDbId not set, skipping logEvent"); return; }
 
@@ -369,8 +440,11 @@ export async function logLead(data: {
   productName?: string;
   sessionId?: string;
 }): Promise<void> {
+  if (!(await ensureNotionReady("logLead"))) {
+    throw new Error(g.__notionDbIds.lastError || "Notion lead database is not ready");
+  }
   const dbId = getLeadsDbId();
-  if (!dbId) { console.warn("[Notion] leadsDbId not set, skipping logLead"); return; }
+  if (!dbId) { throw new Error("Notion lead database is not ready"); }
 
   try {
     await notionFetch("/pages", "POST", {
@@ -524,6 +598,7 @@ function fallbackTriage(patterns: FeedbackPattern[]) {
 // We don't run topic modelling — we just hand the raw questions to the AI
 // triage which is plenty smart enough to spot recurring themes.
 async function mineChatQuestionPatterns(): Promise<FeedbackPattern[]> {
+  if (!(await ensureNotionReady("mineChatQuestionPatterns"))) return [];
   const eventsDbId = getEventsDbId();
   if (!eventsDbId) return [];
 
@@ -605,9 +680,12 @@ export function notifyFeedbackForAutoAggregate() {
 }
 
 export async function aggregateFeedbackToBacklog(): Promise<{ created: number; updated: number; monitored: number; ignored: number }> {
+  if (!(await ensureNotionReady("aggregateFeedbackToBacklog"))) {
+    throw new Error(g.__notionDbIds.lastError || "Notion feedback loop is not configured");
+  }
   const fbDbId = getFeedbackDbId();
   const blDbId = getBacklogDbId();
-  if (!fbDbId || !blDbId) return { created: 0, updated: 0, monitored: 0, ignored: 0 };
+  if (!fbDbId || !blDbId) throw new Error("Product Feedback or Product Backlog database is not ready");
 
   try {
     // 1. Query ALL feedback (positive + negative) for full picture
@@ -655,6 +733,7 @@ export async function aggregateFeedbackToBacklog(): Promise<{ created: number; u
     // distinct source — feed clusters of recent chat questions in as patterns.
     const chatPatterns = await mineChatQuestionPatterns();
     const allPatterns = [...signalPatterns, ...chatPatterns];
+    const patternByItem = Object.fromEntries(allPatterns.map(p => [p.itemName, p]));
 
     if (allPatterns.length === 0) {
       console.log("[Notion] No actionable patterns found");
@@ -680,14 +759,18 @@ export async function aggregateFeedbackToBacklog(): Promise<{ created: number; u
 
       // Only "build" and "improve_prompt" verdicts create/update backlog items
       const existingId = Object.entries(existingTasks).find(([t]) => t.includes(item.itemName))?.[1];
-      const sourceSignal = item.verdict === "improve_prompt" ? "N/A Pattern" : "Negative Feedback";
+      const isChatPattern = item.itemName.startsWith("Chat Questions");
+      const sourceSignal = isChatPattern
+        ? "Chat Question Cluster"
+        : item.verdict === "improve_prompt" ? "N/A Pattern" : "Negative Feedback";
+      const feedbackCount = patternByItem[item.itemName]?.count || 0;
 
       if (existingId) {
         await notionFetch(`/pages/${existingId}`, "PATCH", {
           properties: {
             "Task": { title: [{ text: { content: item.taskTitle } }] },
             "Priority": { select: { name: item.priority } },
-            "Feedback Count": { number: patterns[item.itemName]?.count || 0 },
+            "Feedback Count": { number: feedbackCount },
             "Evidence": { rich_text: [{ text: { content: `${item.reasoning}\n\n${item.evidence}` } }] },
           }
         });
@@ -701,7 +784,7 @@ export async function aggregateFeedbackToBacklog(): Promise<{ created: number; u
             "Category": { select: { name: item.category } },
             "Status": { select: { name: "Backlog" } },
             "Evidence": { rich_text: [{ text: { content: `${item.reasoning}\n\n${item.evidence}` } }] },
-            "Feedback Count": { number: patterns[item.itemName]?.count || 0 },
+            "Feedback Count": { number: feedbackCount },
             "Affected Items": { rich_text: [{ text: { content: item.itemName } }] },
             "Source Signal": { select: { name: sourceSignal } },
             "Created": { date: { start: new Date().toISOString() } },
