@@ -12,6 +12,7 @@ if (!g.__notionDbIds) {
     backlog: null,
     events: null,
     leads: null,
+    insights: null,
     initialized: false,
     initPromise: null,
     lastError: null,
@@ -22,6 +23,7 @@ function getFeedbackDbId(): string | null { return g.__notionDbIds.feedback; }
 function getBacklogDbId(): string | null { return g.__notionDbIds.backlog; }
 function getEventsDbId(): string | null { return g.__notionDbIds.events; }
 function getLeadsDbId(): string | null { return g.__notionDbIds.leads; }
+function getInsightsDbId(): string | null { return g.__notionDbIds.insights; }
 
 function hasNotionCredentials(): boolean {
   return !!(process.env.NOTION_PAGE_ID && process.env.NOTION_API_KEY);
@@ -159,6 +161,7 @@ async function createBacklogDb(pageId: string): Promise<string> {
           options: [
             { name: "Negative Feedback", color: "red" },
             { name: "Chat Question Cluster", color: "blue" },
+            { name: "Analytics Pattern", color: "purple" },
             { name: "N/A Pattern", color: "gray" },
             { name: "Low Completion", color: "orange" },
             { name: "Feature Request", color: "green" },
@@ -169,6 +172,57 @@ async function createBacklogDb(pageId: string): Promise<string> {
     }
   });
   console.log("[Notion] Created Product Backlog database");
+  return data.id;
+}
+
+// Product Insights — autonomous PM summaries generated from Analytics Events,
+// Feedback, and Leads. This is the readable output layer above raw events.
+async function createInsightsDb(pageId: string): Promise<string> {
+  const data = await notionFetch("/databases", "POST", {
+    parent: { type: "page_id", page_id: pageId },
+    title: [{ type: "text", text: { content: "Product Insights" } }],
+    properties: {
+      "Insight": { title: {} },
+      "Type": {
+        select: {
+          options: [
+            { name: "Funnel", color: "blue" },
+            { name: "UX Friction", color: "orange" },
+            { name: "Content Gap", color: "yellow" },
+            { name: "AI Quality", color: "purple" },
+            { name: "Lead Signal", color: "green" },
+            { name: "Operational", color: "gray" },
+          ],
+        },
+      },
+      "Priority": {
+        select: {
+          options: [
+            { name: "P0 - Critical", color: "red" },
+            { name: "P1 - High", color: "orange" },
+            { name: "P2 - Medium", color: "yellow" },
+            { name: "P3 - Low", color: "gray" },
+          ],
+        },
+      },
+      "Status": {
+        select: {
+          options: [
+            { name: "New", color: "blue" },
+            { name: "Reviewing", color: "yellow" },
+            { name: "Backlogged", color: "purple" },
+            { name: "Closed", color: "gray" },
+          ],
+        },
+      },
+      "Evidence": { rich_text: {} },
+      "Recommendation": { rich_text: {} },
+      "Sessions": { number: { format: "number" } },
+      "Events": { number: { format: "number" } },
+      "Created": { date: {} },
+    },
+  });
+  console.log("[Notion] Created Product Insights database");
   return data.id;
 }
 
@@ -256,6 +310,7 @@ export async function initNotion(): Promise<void> {
       g.__notionDbIds.backlog = await findDatabase("Product Backlog") || await createBacklogDb(pageId);
       g.__notionDbIds.events = await findDatabase("Analytics Events") || await createEventsDb(pageId);
       g.__notionDbIds.leads = await findDatabase("Agent Consultation Requests") || await createLeadsDb(pageId);
+      g.__notionDbIds.insights = await findDatabase("Product Insights") || await createInsightsDb(pageId);
 
       // Idempotent schema upgrades. These keep older demo Notion workspaces
       // compatible as the prototype evolves.
@@ -263,6 +318,24 @@ export async function initNotion(): Promise<void> {
         await notionFetch(`/databases/${g.__notionDbIds.feedback}`, "PATCH", {
           properties: { "Rating": { number: { format: "number" } } },
         }).catch((e: any) => console.warn("[Notion] Rating column upgrade skipped:", e.message));
+      }
+      if (g.__notionDbIds.backlog) {
+        await notionFetch(`/databases/${g.__notionDbIds.backlog}`, "PATCH", {
+          properties: {
+            "Source Signal": {
+              select: {
+                options: [
+                  { name: "Negative Feedback", color: "red" },
+                  { name: "Chat Question Cluster", color: "blue" },
+                  { name: "Analytics Pattern", color: "purple" },
+                  { name: "N/A Pattern", color: "gray" },
+                  { name: "Low Completion", color: "orange" },
+                  { name: "Feature Request", color: "green" },
+                ],
+              },
+            },
+          },
+        }).catch((e: any) => console.warn("[Notion] Source Signal upgrade skipped:", e.message));
       }
 
       g.__notionDbIds.initialized = true;
@@ -272,6 +345,7 @@ export async function initNotion(): Promise<void> {
         backlog: !!g.__notionDbIds.backlog,
         events: !!g.__notionDbIds.events,
         leads: !!g.__notionDbIds.leads,
+        insights: !!g.__notionDbIds.insights,
       });
     } catch (e: any) {
       g.__notionDbIds.lastError = e.message || "Notion initialization failed";
@@ -301,7 +375,7 @@ async function ensureNotionReady(caller: string): Promise<boolean> {
 export async function getNotionLoopStatus(): Promise<{
   configured: boolean;
   initialized: boolean;
-  databases: Record<"feedback" | "backlog" | "events" | "leads", boolean>;
+  databases: Record<"feedback" | "backlog" | "events" | "leads" | "insights", boolean>;
   lastError: string | null;
 }> {
   if (hasNotionCredentials() && !g.__notionDbIds.initialized) {
@@ -316,6 +390,7 @@ export async function getNotionLoopStatus(): Promise<{
       backlog: !!getBacklogDbId(),
       events: !!getEventsDbId(),
       leads: !!getLeadsDbId(),
+      insights: !!getInsightsDbId(),
     },
     lastError: g.__notionDbIds.lastError || null,
   };
@@ -511,6 +586,47 @@ interface FeedbackPattern {
   sessions: number; // unique sessions — more sessions = more real
 }
 
+interface AnalyticsEventRow {
+  event: string;
+  session: string;
+  properties: Record<string, any>;
+  date?: string;
+}
+
+interface ProductInsight {
+  title: string;
+  type: "Funnel" | "UX Friction" | "Content Gap" | "AI Quality" | "Lead Signal" | "Operational";
+  priority: "P0 - Critical" | "P1 - High" | "P2 - Medium" | "P3 - Low";
+  evidence: string;
+  recommendation: string;
+  sessions: number;
+  events: number;
+  createBacklogTask: boolean;
+  backlogTitle?: string;
+  backlogCategory?: "AI Quality" | "Content Gap" | "UX Improvement" | "New Feature" | "Bug Fix";
+}
+
+const INSIGHT_TYPES = ["Funnel", "UX Friction", "Content Gap", "AI Quality", "Lead Signal", "Operational"] as const;
+const PRIORITIES = ["P0 - Critical", "P1 - High", "P2 - Medium", "P3 - Low"] as const;
+const BACKLOG_CATEGORIES = ["AI Quality", "Content Gap", "UX Improvement", "New Feature", "Bug Fix"] as const;
+
+function normalizeOption<T extends readonly string[]>(value: string | undefined, allowed: T, fallback: T[number]): T[number] {
+  return allowed.find(v => v === value) || fallback;
+}
+
+function safeJsonParse(text: string): Record<string, any> {
+  try {
+    const parsed = JSON.parse(text || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function truncateText(text: string, max = 1900): string {
+  return text.length > max ? `${text.slice(0, max - 3)}...` : text;
+}
+
 async function aiTriage(patterns: FeedbackPattern[]): Promise<{
   actionable: Array<{
     itemName: string;
@@ -592,6 +708,247 @@ function fallbackTriage(patterns: FeedbackPattern[]) {
         evidence: `Reasons: ${Object.entries(p.reasons).map(([r, c]) => `${r}: ${c}`).join(", ")}`,
       };
     });
+}
+
+async function queryAnalyticsEvents(): Promise<AnalyticsEventRow[]> {
+  if (!(await ensureNotionReady("queryAnalyticsEvents"))) return [];
+  const eventsDbId = getEventsDbId();
+  if (!eventsDbId) return [];
+
+  const data = await notionFetch(`/databases/${eventsDbId}/query`, "POST", {
+    page_size: 100,
+    sorts: [{ property: "Date", direction: "descending" }],
+  });
+
+  return (data.results || []).map((page: any) => {
+    const propsText = page.properties?.["Properties"]?.rich_text?.[0]?.plain_text || "{}";
+    return {
+      event: page.properties?.["Event"]?.title?.[0]?.plain_text || "unknown",
+      session: page.properties?.["Session"]?.rich_text?.[0]?.plain_text || "unknown",
+      properties: safeJsonParse(propsText),
+      date: page.properties?.["Date"]?.date?.start,
+    };
+  });
+}
+
+function summarizeAnalytics(events: AnalyticsEventRow[]) {
+  const byEvent: Record<string, number> = {};
+  const products: Record<string, number> = {};
+  const categories: Record<string, number> = {};
+  const expandedItems: Record<string, number> = {};
+  const sessions = new Set<string>();
+  const timeToReport: number[] = [];
+
+  for (const row of events) {
+    byEvent[row.event] = (byEvent[row.event] || 0) + 1;
+    if (row.session) sessions.add(row.session);
+    const p = row.properties || {};
+    if (p.productName) products[p.productName] = (products[p.productName] || 0) + 1;
+    if (p.category) categories[p.category] = (categories[p.category] || 0) + 1;
+    if (row.event === "item_expand" && p.itemName) {
+      expandedItems[p.itemName] = (expandedItems[p.itemName] || 0) + 1;
+    }
+    if (typeof p.timeToReport === "number") timeToReport.push(p.timeToReport);
+  }
+
+  const formSubmits = byEvent.form_submit || 0;
+  const reportViews = byEvent.report_view || 0;
+  const agentLeads = byEvent.lead_submit || 0;
+  const avgTimeToReportMs = timeToReport.length
+    ? Math.round(timeToReport.reduce((sum, v) => sum + v, 0) / timeToReport.length)
+    : null;
+
+  return {
+    totalEvents: events.length,
+    sessions: sessions.size,
+    byEvent,
+    categories,
+    products,
+    expandedItems,
+    formToReportRate: formSubmits ? Math.round((reportViews / formSubmits) * 100) : null,
+    reportToLeadRate: reportViews ? Math.round((agentLeads / reportViews) * 100) : null,
+    avgTimeToReportMs,
+  };
+}
+
+function fallbackAnalyticsInsights(events: AnalyticsEventRow[]): ProductInsight[] {
+  const summary = summarizeAnalytics(events);
+  const insights: ProductInsight[] = [];
+
+  if (summary.totalEvents === 0) return insights;
+
+  if ((summary.byEvent.form_submit || 0) > 0 && (summary.byEvent.report_view || 0) === 0) {
+    insights.push({
+      title: "Users start checks but no reports are being viewed",
+      type: "Funnel",
+      priority: "P1 - High",
+      evidence: `${summary.byEvent.form_submit} form submits but 0 report views in the latest ${summary.totalEvents} events.`,
+      recommendation: "Review crew completion failures, API latency, and the final report CTA.",
+      sessions: summary.sessions,
+      events: summary.totalEvents,
+      createBacklogTask: true,
+      backlogTitle: "Investigate form-submit to report-view dropoff",
+      backlogCategory: "Bug Fix",
+    });
+  }
+
+  const topExpanded = Object.entries(summary.expandedItems).sort((a, b) => b[1] - a[1])[0];
+  if (topExpanded && topExpanded[1] >= 2) {
+    insights.push({
+      title: `Users repeatedly inspect "${topExpanded[0]}"`,
+      type: "Content Gap",
+      priority: "P2 - Medium",
+      evidence: `"${topExpanded[0]}" was expanded ${topExpanded[1]} times, suggesting users need more confidence or detail there.`,
+      recommendation: "Improve the explanation, next steps, or source citations for this compliance item.",
+      sessions: summary.sessions,
+      events: topExpanded[1],
+      createBacklogTask: true,
+      backlogTitle: `Improve detail for "${topExpanded[0]}"`,
+      backlogCategory: "Content Gap",
+    });
+  }
+
+  if (insights.length === 0) {
+    insights.push({
+      title: "Analytics events are flowing into Notion",
+      type: "Operational",
+      priority: "P3 - Low",
+      evidence: `${summary.totalEvents} events across ${summary.sessions} sessions are available for triage.`,
+      recommendation: "Keep collecting signal until stronger product patterns emerge.",
+      sessions: summary.sessions,
+      events: summary.totalEvents,
+      createBacklogTask: false,
+    });
+  }
+
+  return insights;
+}
+
+async function generateAnalyticsInsights(events: AnalyticsEventRow[]): Promise<ProductInsight[]> {
+  if (events.length === 0) return [];
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return fallbackAnalyticsInsights(events);
+
+  const summary = summarizeAnalytics(events);
+  const recentEvents = events.slice(0, 60).map(e => ({
+    event: e.event,
+    session: e.session,
+    properties: e.properties,
+    date: e.date,
+  }));
+
+  const prompt = `You are TradeSetu's autonomous product insights agent.
+
+Your job: turn raw analytics into concise, action-oriented product insights for the founder.
+
+ANALYTICS SUMMARY:
+${JSON.stringify(summary, null, 2)}
+
+RECENT RAW EVENTS:
+${JSON.stringify(recentEvents, null, 2)}
+
+Rules:
+- Create 2-5 insights maximum.
+- Prefer real funnel, UX, content, AI-quality, or lead-generation patterns.
+- Do not create backlog tasks for weak one-off noise.
+- If the signal is still thin, create one Operational insight saying analytics are flowing.
+- Use plain English, not analytics jargon.
+- Evidence must cite counts from the data.
+
+Return JSON only:
+{
+  "insights": [
+    {
+      "title": "short insight title",
+      "type": "Funnel | UX Friction | Content Gap | AI Quality | Lead Signal | Operational",
+      "priority": "P0 - Critical | P1 - High | P2 - Medium | P3 - Low",
+      "evidence": "1-2 sentence evidence with counts",
+      "recommendation": "1 concrete action",
+      "sessions": 0,
+      "events": 0,
+      "createBacklogTask": true,
+      "backlogTitle": "optional task title",
+      "backlogCategory": "AI Quality | Content Gap | UX Improvement | New Feature | Bug Fix"
+    }
+  ]
+}`;
+
+  try {
+    const res = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: "application/json", temperature: 0.15 },
+      }),
+    });
+
+    const data = await res.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) throw new Error("No AI response");
+    const parsed = JSON.parse(text);
+    const rawInsights = Array.isArray(parsed.insights) ? parsed.insights : [];
+
+    return rawInsights.map((i: any) => ({
+      title: String(i.title || "Untitled insight").slice(0, 180),
+      type: normalizeOption(i.type, INSIGHT_TYPES, "Operational"),
+      priority: normalizeOption(i.priority, PRIORITIES, "P3 - Low"),
+      evidence: String(i.evidence || ""),
+      recommendation: String(i.recommendation || ""),
+      sessions: Number.isFinite(Number(i.sessions)) ? Number(i.sessions) : summary.sessions,
+      events: Number.isFinite(Number(i.events)) ? Number(i.events) : summary.totalEvents,
+      createBacklogTask: !!i.createBacklogTask,
+      backlogTitle: i.backlogTitle ? String(i.backlogTitle).slice(0, 180) : undefined,
+      backlogCategory: normalizeOption(i.backlogCategory, BACKLOG_CATEGORIES, "UX Improvement"),
+    })).slice(0, 5);
+  } catch (e: any) {
+    console.error("[Notion] Analytics insight agent failed, using fallback:", e.message);
+    return fallbackAnalyticsInsights(events);
+  }
+}
+
+async function upsertProductInsights(insights: ProductInsight[]): Promise<{ created: number; updated: number }> {
+  if (insights.length === 0) return { created: 0, updated: 0 };
+  if (!(await ensureNotionReady("upsertProductInsights"))) return { created: 0, updated: 0 };
+  const insightsDbId = getInsightsDbId();
+  if (!insightsDbId) return { created: 0, updated: 0 };
+
+  const existing = await notionFetch(`/databases/${insightsDbId}/query`, "POST", { page_size: 100 });
+  const existingByTitle: Record<string, string> = {};
+  for (const page of existing.results || []) {
+    const title = page.properties?.["Insight"]?.title?.[0]?.plain_text || "";
+    if (title) existingByTitle[title] = page.id;
+  }
+
+  let created = 0;
+  let updated = 0;
+  for (const insight of insights) {
+    const properties = {
+      "Insight": { title: [{ text: { content: insight.title } }] },
+      "Type": { select: { name: insight.type } },
+      "Priority": { select: { name: insight.priority } },
+      "Status": { select: { name: insight.createBacklogTask ? "Backlogged" : "New" } },
+      "Evidence": { rich_text: [{ text: { content: truncateText(insight.evidence) } }] },
+      "Recommendation": { rich_text: [{ text: { content: truncateText(insight.recommendation) } }] },
+      "Sessions": { number: insight.sessions || 0 },
+      "Events": { number: insight.events || 0 },
+      "Created": { date: { start: new Date().toISOString() } },
+    };
+
+    const existingId = existingByTitle[insight.title];
+    if (existingId) {
+      await notionFetch(`/pages/${existingId}`, "PATCH", { properties });
+      updated++;
+    } else {
+      await notionFetch("/pages", "POST", {
+        parent: { database_id: insightsDbId },
+        properties,
+      });
+      created++;
+    }
+  }
+
+  return { created, updated };
 }
 
 // Pull recent chat_question events from the Events DB and cluster them.
@@ -679,7 +1036,14 @@ export function notifyFeedbackForAutoAggregate() {
   }
 }
 
-export async function aggregateFeedbackToBacklog(): Promise<{ created: number; updated: number; monitored: number; ignored: number }> {
+export async function aggregateFeedbackToBacklog(): Promise<{
+  created: number;
+  updated: number;
+  monitored: number;
+  ignored: number;
+  insightsCreated: number;
+  insightsUpdated: number;
+}> {
   if (!(await ensureNotionReady("aggregateFeedbackToBacklog"))) {
     throw new Error(g.__notionDbIds.lastError || "Notion feedback loop is not configured");
   }
@@ -735,13 +1099,20 @@ export async function aggregateFeedbackToBacklog(): Promise<{ created: number; u
     const allPatterns = [...signalPatterns, ...chatPatterns];
     const patternByItem = Object.fromEntries(allPatterns.map(p => [p.itemName, p]));
 
-    if (allPatterns.length === 0) {
-      console.log("[Notion] No actionable patterns found");
-      return { created: 0, updated: 0, monitored: 0, ignored: 0 };
+    // 3b. Convert raw analytics events into founder-readable insights.
+    const analyticsEvents = await queryAnalyticsEvents();
+    const analyticsInsights = await generateAnalyticsInsights(analyticsEvents);
+    const insightWrites = await upsertProductInsights(analyticsInsights);
+
+    if (allPatterns.length === 0 && analyticsInsights.length === 0) {
+      console.log("[Notion] No actionable patterns or analytics insights found");
+      return { created: 0, updated: 0, monitored: 0, ignored: 0, insightsCreated: 0, insightsUpdated: 0 };
     }
 
     // 4. AI triage — let the PM brain decide what's worth building
-    const triaged = await aiTriage(allPatterns);
+    const triaged = allPatterns.length > 0
+      ? await aiTriage(allPatterns)
+      : { actionable: [] };
 
     // 5. Query existing backlog to avoid duplicates
     const backlogData = await notionFetch(`/databases/${blDbId}/query`, "POST", { page_size: 100 });
@@ -794,10 +1165,39 @@ export async function aggregateFeedbackToBacklog(): Promise<{ created: number; u
       }
     }
 
-    console.log(`[Notion] Smart triage: ${created} created, ${updated} updated, ${monitored} monitoring, ${ignored} ignored`);
-    return { created, updated, monitored, ignored };
+    // 6. Insights can also promote themselves into the backlog. This makes
+    // raw analytics useful even when users do not leave thumbs-up/down.
+    for (const insight of analyticsInsights.filter(i => i.createBacklogTask)) {
+      const taskTitle = insight.backlogTitle || insight.title;
+      const existingId = existingTasks[taskTitle] || Object.entries(existingTasks).find(([t]) => t.includes(taskTitle))?.[1];
+      const properties = {
+        "Task": { title: [{ text: { content: taskTitle } }] },
+        "Priority": { select: { name: insight.priority } },
+        "Category": { select: { name: insight.backlogCategory || "UX Improvement" } },
+        "Status": { select: { name: "Backlog" } },
+        "Evidence": { rich_text: [{ text: { content: truncateText(`${insight.evidence}\n\nRecommendation: ${insight.recommendation}`) } }] },
+        "Feedback Count": { number: insight.events || 0 },
+        "Affected Items": { rich_text: [{ text: { content: insight.title } }] },
+        "Source Signal": { select: { name: "Analytics Pattern" } },
+        "Created": { date: { start: new Date().toISOString() } },
+      };
+
+      if (existingId) {
+        await notionFetch(`/pages/${existingId}`, "PATCH", { properties });
+        updated++;
+      } else {
+        await notionFetch("/pages", "POST", {
+          parent: { database_id: blDbId },
+          properties,
+        });
+        created++;
+      }
+    }
+
+    console.log(`[Notion] Smart triage: ${created} backlog created, ${updated} updated, ${monitored} monitoring, ${ignored} ignored; insights ${insightWrites.created} created, ${insightWrites.updated} updated`);
+    return { created, updated, monitored, ignored, insightsCreated: insightWrites.created, insightsUpdated: insightWrites.updated };
   } catch (e: any) {
     console.error("[Notion] Aggregation failed:", e.message);
-    return { created: 0, updated: 0, monitored: 0, ignored: 0 };
+    return { created: 0, updated: 0, monitored: 0, ignored: 0, insightsCreated: 0, insightsUpdated: 0 };
   }
 }

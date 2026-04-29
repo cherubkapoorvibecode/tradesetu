@@ -266,6 +266,13 @@ export async function handleLeadRequest(req: IncomingMessage, res: ServerRespons
 
     console.log(`[Lead] New consultation request from ${name} <${email}>`);
     await logLead({ name: name.trim(), email: email.trim(), phone, company, question, productCategory, tradeRoute, productName, sessionId });
+    logEvent({
+      event: "lead_submit",
+      sessionId: sessionId || `lead_${Date.now()}`,
+      properties: { productCategory, tradeRoute, productName, company: company || undefined },
+    })
+      .then(() => notifyFeedbackForAutoAggregate())
+      .catch(() => {});
 
     sendJson(res, 200, { success: true });
   } catch (e: any) {
@@ -285,7 +292,9 @@ export async function handleEventsRequest(req: IncomingMessage, res: ServerRespo
     const body = await readBody(req);
     const { event, sessionId, properties } = JSON.parse(body);
 
-    logEvent({ event, sessionId, properties }).catch(() => {});
+    logEvent({ event, sessionId, properties })
+      .then(() => notifyFeedbackForAutoAggregate())
+      .catch(() => {});
 
     sendJson(res, 200, { success: true });
   } catch (e: any) {
