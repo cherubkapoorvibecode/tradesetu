@@ -160,7 +160,10 @@ const App: React.FC = () => {
         {view === 'hs-classify' && (
           <div className="px-6 py-12 md:py-20 min-h-[80vh]">
             <HsClassifier
-              onBack={() => { setView('landing'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+              onBack={() => {
+                setView(report ? 'results' : 'landing');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
               languagePref={languagePref}
               prefill={userInput ? {
                 productName: userInput.productName,
@@ -179,7 +182,13 @@ const App: React.FC = () => {
         {view === 'label-automation' && (
           <div className="px-6 py-12 md:py-20 min-h-[80vh]">
             <LabelGuard
-              onBack={() => { setView('landing'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+              onBack={() => {
+                // Smart back: if there's an active report (user came from
+                // the FDA Labeling CTA inside the report), return there.
+                // Otherwise, fall back to the landing page.
+                setView(report ? 'results' : 'landing');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
               languagePref={languagePref}
             />
           </div>

@@ -10,6 +10,7 @@ import ComplianceItemCard, { isLabelItem } from './ComplianceItemCard';
 import ChatPanel from './ChatPanel';
 import DocumentsSection from './DocumentsSection';
 import CrewInsights from './CrewInsights';
+import LeadCaptureCard from './LeadCaptureCard';
 
 interface Props {
   report: ComplianceReport;
@@ -418,6 +419,8 @@ const ComplianceResults: React.FC<Props> = ({ report, userInput, crewResult, onR
         totalDocs={report.documentsNeeded.length}
       />
 
+      {/* Speak with an agent — warm-handoff lead capture */}
+      <LeadCaptureCard userInput={userInput} languagePref={languagePref} />
 
       {/* What's NOT required — collapsed by default */}
       {report.notRequired.length > 0 && (

@@ -66,6 +66,9 @@ export default defineConfig({
           } else if (req.url === '/api/aggregate') {
             const { handleAggregateRequest } = await import('./server/complianceHandler');
             handleAggregateRequest(req, res);
+          } else if (req.url === '/api/lead') {
+            const { handleLeadRequest } = await import('./server/complianceHandler');
+            handleLeadRequest(req, res);
           } else if (req.url === '/api/sarvam/translate') {
             const { handleTranslateRequest } = await import('./server/sarvamService');
             handleTranslateRequest(req, res);

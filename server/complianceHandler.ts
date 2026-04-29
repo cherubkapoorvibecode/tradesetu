@@ -2,7 +2,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import type { IncomingMessage, ServerResponse } from "http";
 import type { FeedbackEntry } from "../types";
-import { logFeedback, logProductFeedback, logEvent, aggregateFeedbackToBacklog } from "./notionService";
+import { logFeedback, logProductFeedback, logEvent, logChatQuestion, logLead, aggregateFeedbackToBacklog, notifyFeedbackForAutoAggregate } from "./notionService";
 
 // In-memory feedback store
 const feedbackStore: FeedbackEntry[] = [];
@@ -147,8 +147,19 @@ export async function handleChatRequest(req: IncomingMessage, res: ServerRespons
 
   try {
     const body = await readBody(req);
-    const { message, conversationHistory, originalReport, originalInput } = JSON.parse(body);
+    const { message, conversationHistory, originalReport, originalInput, sessionId } = JSON.parse(body);
     const ai = getClient();
+
+    // Fire-and-forget: log the question to Notion Events DB so the aggregator
+    // can mine recurring chat themes for content-gap signals.
+    if (message && sessionId) {
+      logChatQuestion({
+        message,
+        sessionId,
+        productCategory: originalInput?.category,
+        tradeRoute: originalInput ? `${originalInput.countryOfManufacture} → ${originalInput.destinationCountry}` : undefined,
+      }).catch(() => {});
+    }
 
     // Build the conversation as a single prompt with context
     const contextBlock = `ORIGINAL PRODUCT:\n${JSON.stringify(originalInput, null, 2)}\n\nORIGINAL COMPLIANCE REPORT:\n${JSON.stringify(originalReport, null, 2)}`;
@@ -200,6 +211,8 @@ export async function handleFeedbackRequest(req: IncomingMessage, res: ServerRes
 
     // Log to Notion (fire-and-forget)
     logFeedback({ itemName, isPositive, reason, category, tradeRoute, sessionId }).catch(() => {});
+    // Trigger aggregation if enough new signal has piled up
+    notifyFeedbackForAutoAggregate();
 
     sendJson(res, 200, { success: true, totalFeedback: feedbackStore.length });
   } catch (e: any) {
@@ -221,11 +234,42 @@ export async function handleProductFeedbackRequest(req: IncomingMessage, res: Se
 
     console.log(`[Product Feedback] Rating: ${rating}/5 — "${comment?.slice(0, 50)}..."`);
     logProductFeedback({ comment, rating, category, sessionId }).catch(() => {});
+    // Product-level feedback is a strong signal — count it too
+    notifyFeedbackForAutoAggregate();
 
     sendJson(res, 200, { success: true });
   } catch (e: any) {
     console.error("Product feedback API error:", e);
     sendJson(res, 500, { error: e.message || "Failed to save product feedback" });
+  }
+}
+
+// ─── Agent Consultation Lead Endpoint ───
+
+export async function handleLeadRequest(req: IncomingMessage, res: ServerResponse) {
+  if (req.method !== "POST") {
+    return sendJson(res, 405, { error: "Method not allowed" });
+  }
+
+  try {
+    const body = await readBody(req);
+    const { name, email, phone, company, question, productCategory, tradeRoute, productName, sessionId } = JSON.parse(body);
+
+    // Minimal validation — name + valid-looking email required
+    if (!name || typeof name !== "string" || name.trim().length < 2) {
+      return sendJson(res, 400, { error: "Name is required" });
+    }
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return sendJson(res, 400, { error: "A valid email is required" });
+    }
+
+    console.log(`[Lead] New consultation request from ${name} <${email}>`);
+    await logLead({ name: name.trim(), email: email.trim(), phone, company, question, productCategory, tradeRoute, productName, sessionId });
+
+    sendJson(res, 200, { success: true });
+  } catch (e: any) {
+    console.error("Lead API error:", e);
+    sendJson(res, 500, { error: e.message || "Failed to save consultation request" });
   }
 }
 

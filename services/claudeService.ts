@@ -60,6 +60,31 @@ export const submitProductFeedback = async (data: {
   return response.json();
 };
 
+// Submit a "Speak with an agent for free" consultation request.
+// Surfaces in the Notion "Agent Consultation Requests" DB as a New lead.
+export const submitLead = async (data: {
+  name: string;
+  email: string;
+  phone?: string;
+  company?: string;
+  question?: string;
+  productCategory?: string;
+  tradeRoute?: string;
+  productName?: string;
+  sessionId?: string;
+}): Promise<{ success: boolean }> => {
+  const response = await fetch("/api/lead", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to submit consultation request.");
+  }
+  return response.json();
+};
+
 export const trackEvent = async (data: {
   event: string;
   sessionId: string;

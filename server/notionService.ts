@@ -6,11 +6,12 @@ const NOTION_VERSION = "2022-06-28";
 
 // Store DB IDs on globalThis so they survive Vite HMR reloads
 const g = globalThis as any;
-if (!g.__notionDbIds) g.__notionDbIds = { feedback: null, backlog: null, events: null, initialized: false };
+if (!g.__notionDbIds) g.__notionDbIds = { feedback: null, backlog: null, events: null, leads: null, initialized: false };
 
 function getFeedbackDbId(): string | null { return g.__notionDbIds.feedback; }
 function getBacklogDbId(): string | null { return g.__notionDbIds.backlog; }
 function getEventsDbId(): string | null { return g.__notionDbIds.events; }
+function getLeadsDbId(): string | null { return g.__notionDbIds.leads; }
 
 function getHeaders() {
   const key = process.env.NOTION_API_KEY;
@@ -172,6 +173,50 @@ async function createEventsDb(pageId: string): Promise<string> {
   return data.id;
 }
 
+// Agent Consultation Requests — leads captured from "Speak with an agent for free"
+// CTA shown after the compliance report. Fed into the agency-led GTM funnel.
+async function createLeadsDb(pageId: string): Promise<string> {
+  const data = await notionFetch("/databases", "POST", {
+    parent: { type: "page_id", page_id: pageId },
+    title: [{ type: "text", text: { content: "Agent Consultation Requests" } }],
+    properties: {
+      "Name": { title: {} },
+      "Email": { email: {} },
+      "Phone": { phone_number: {} },
+      "Company": { rich_text: {} },
+      "Question": { rich_text: {} },
+      "Product Category": {
+        select: {
+          options: [
+            { name: "Food", color: "green" },
+            { name: "Cosmetics", color: "pink" },
+            { name: "Electronics", color: "blue" },
+            { name: "Apparel / Textile", color: "purple" },
+            { name: "Toys / Children's products", color: "yellow" },
+            { name: "Other consumer goods", color: "gray" },
+          ]
+        }
+      },
+      "Trade Route": { rich_text: {} },
+      "Product": { rich_text: {} },
+      "Status": {
+        select: {
+          options: [
+            { name: "New", color: "blue" },
+            { name: "Contacted", color: "yellow" },
+            { name: "Qualified", color: "green" },
+            { name: "Closed", color: "gray" },
+          ]
+        }
+      },
+      "Session": { rich_text: {} },
+      "Date": { date: {} },
+    }
+  });
+  console.log("[Notion] Created Agent Consultation Requests database");
+  return data.id;
+}
+
 // ─── Initialize: find or create all databases ───
 
 export async function initNotion(): Promise<void> {
@@ -190,6 +235,7 @@ export async function initNotion(): Promise<void> {
     g.__notionDbIds.feedback = await findDatabase("Product Feedback") || await createFeedbackDb(pageId);
     g.__notionDbIds.backlog = await findDatabase("Product Backlog") || await createBacklogDb(pageId);
     g.__notionDbIds.events = await findDatabase("Analytics Events") || await createEventsDb(pageId);
+    g.__notionDbIds.leads = await findDatabase("Agent Consultation Requests") || await createLeadsDb(pageId);
 
     // Idempotent schema upgrade: ensure the "Rating" property exists on the
     // Feedback DB for users whose DB predates the rating field. Notion accepts
@@ -308,6 +354,70 @@ export async function logEvent(data: {
   }
 }
 
+// ─── Log Agent Consultation Request (lead capture) ───
+// Called when a user submits the "Speak with an agent for free" form after
+// reading their compliance report. These are warm leads — the user has just
+// seen the full plan and is ready for human help.
+export async function logLead(data: {
+  name: string;
+  email: string;
+  phone?: string;
+  company?: string;
+  question?: string;
+  productCategory?: string;
+  tradeRoute?: string;
+  productName?: string;
+  sessionId?: string;
+}): Promise<void> {
+  const dbId = getLeadsDbId();
+  if (!dbId) { console.warn("[Notion] leadsDbId not set, skipping logLead"); return; }
+
+  try {
+    await notionFetch("/pages", "POST", {
+      parent: { database_id: dbId },
+      properties: {
+        "Name":              { title: [{ text: { content: data.name } }] },
+        "Email":             { email: data.email },
+        "Status":            { select: { name: "New" } },
+        "Date":              { date: { start: new Date().toISOString() } },
+        ...(data.phone           ? { "Phone": { phone_number: data.phone } } : {}),
+        ...(data.company         ? { "Company": { rich_text: [{ text: { content: data.company } }] } } : {}),
+        ...(data.question        ? { "Question": { rich_text: [{ text: { content: data.question.slice(0, 2000) } }] } } : {}),
+        ...(data.productCategory ? { "Product Category": { select: { name: data.productCategory } } } : {}),
+        ...(data.tradeRoute      ? { "Trade Route": { rich_text: [{ text: { content: data.tradeRoute } }] } } : {}),
+        ...(data.productName     ? { "Product": { rich_text: [{ text: { content: data.productName } }] } } : {}),
+        ...(data.sessionId       ? { "Session": { rich_text: [{ text: { content: data.sessionId } }] } } : {}),
+      }
+    });
+    console.log(`[Notion] Lead logged: ${data.name} (${data.email})`);
+  } catch (e: any) {
+    console.error("[Notion] Failed to log lead:", e.message);
+    throw e; // bubble up — lead loss is bad, the API endpoint should know
+  }
+}
+
+// ─── Log Chat Question ───
+// Captures every user chat message as a structured "chat_question" event so
+// the aggregator can mine recurring questions for content-gap signals.
+// Recurring chat questions about the same topic = real product signal that
+// thumbs-up/down feedback alone won't surface.
+export async function logChatQuestion(data: {
+  message: string;
+  sessionId: string;
+  productCategory?: string;
+  tradeRoute?: string;
+}): Promise<void> {
+  return logEvent({
+    event: "chat_question",
+    sessionId: data.sessionId,
+    properties: {
+      message: data.message.slice(0, 500),
+      productCategory: data.productCategory,
+      tradeRoute: data.tradeRoute,
+    },
+  });
+}
+
 // ─── Smart Aggregate: Feedback → AI Triage → Backlog Items ───
 //
 // Think like a good PM:
@@ -410,6 +520,90 @@ function fallbackTriage(patterns: FeedbackPattern[]) {
     });
 }
 
+// Pull recent chat_question events from the Events DB and cluster them.
+// We don't run topic modelling — we just hand the raw questions to the AI
+// triage which is plenty smart enough to spot recurring themes.
+async function mineChatQuestionPatterns(): Promise<FeedbackPattern[]> {
+  const eventsDbId = getEventsDbId();
+  if (!eventsDbId) return [];
+
+  try {
+    const data = await notionFetch(`/databases/${eventsDbId}/query`, "POST", {
+      page_size: 100,
+      filter: { property: "Event", title: { equals: "chat_question" } },
+    });
+
+    type RawQ = { message: string; category: string; session: string };
+    const rawQuestions: RawQ[] = [];
+    for (const page of data.results || []) {
+      const propsJson = page.properties?.["Properties"]?.rich_text?.[0]?.plain_text || "{}";
+      let parsed: any = {};
+      try { parsed = JSON.parse(propsJson); } catch {}
+      const session = page.properties?.["Session"]?.rich_text?.[0]?.plain_text || "unknown";
+      if (parsed.message) {
+        rawQuestions.push({
+          message: parsed.message,
+          category: parsed.productCategory || "Unknown",
+          session,
+        });
+      }
+    }
+
+    if (rawQuestions.length < 3) return []; // not enough signal
+
+    // Build ONE big pattern with all questions — AI triage reads them and
+    // decides which ones cluster into actionable themes.
+    const sessions = new Set(rawQuestions.map(q => q.session));
+    const categories: Record<string, number> = {};
+    for (const q of rawQuestions) {
+      categories[q.category] = (categories[q.category] || 0) + 1;
+    }
+
+    return [{
+      itemName: `Chat Questions (${rawQuestions.length} recent)`,
+      count: rawQuestions.length,
+      reasons: { chat_cluster: rawQuestions.length },
+      categories,
+      routes: {},
+      sessions: sessions.size,
+      // Stash raw questions on the pattern so AI triage prompt can read them
+      ...(rawQuestions.length > 0 ? { _rawQuestions: rawQuestions.slice(0, 30).map(q => q.message) } : {}),
+    } as any];
+  } catch (e: any) {
+    console.error("[Notion] Failed to mine chat questions:", e.message);
+    return [];
+  }
+}
+
+// ─── Auto-aggregation trigger ─────────────────────────────────────
+// Called on every feedback submission. Runs the aggregator in the background
+// when enough new signal has accumulated, but never more than once per
+// COOLDOWN_MS (so a burst of feedback doesn't hammer the Gemini API).
+let lastAggregateAt = 0;
+let pendingAggregate = false;
+const COOLDOWN_MS = 60_000;     // at most once per minute
+const MIN_FEEDBACKS = 3;        // need at least N new feedbacks to bother
+let feedbacksSinceLastRun = 0;
+
+export function notifyFeedbackForAutoAggregate() {
+  feedbacksSinceLastRun++;
+
+  const now = Date.now();
+  const cooldownOK = (now - lastAggregateAt) >= COOLDOWN_MS;
+  const enoughSignal = feedbacksSinceLastRun >= MIN_FEEDBACKS;
+
+  if (!pendingAggregate && cooldownOK && enoughSignal) {
+    pendingAggregate = true;
+    feedbacksSinceLastRun = 0;
+    lastAggregateAt = now;
+    // Fire-and-forget — never blocks the user's feedback request
+    aggregateFeedbackToBacklog()
+      .then(r => console.log(`[Notion] Auto-aggregate ran:`, r))
+      .catch(e => console.error(`[Notion] Auto-aggregate failed:`, e?.message))
+      .finally(() => { pendingAggregate = false; });
+  }
+}
+
 export async function aggregateFeedbackToBacklog(): Promise<{ created: number; updated: number; monitored: number; ignored: number }> {
   const fbDbId = getFeedbackDbId();
   const blDbId = getBacklogDbId();
@@ -456,13 +650,19 @@ export async function aggregateFeedbackToBacklog(): Promise<{ created: number; u
     // 3. Filter out items that also have positive feedback (net positive = leave alone)
     const signalPatterns = Object.values(patterns).filter(p => !positiveItems.has(p.itemName));
 
-    if (signalPatterns.length === 0) {
+    // 3a. Mine chat questions from the events DB for content-gap signals.
+    // The AI triage prompt already understands "Chat Question Cluster" as a
+    // distinct source — feed clusters of recent chat questions in as patterns.
+    const chatPatterns = await mineChatQuestionPatterns();
+    const allPatterns = [...signalPatterns, ...chatPatterns];
+
+    if (allPatterns.length === 0) {
       console.log("[Notion] No actionable patterns found");
       return { created: 0, updated: 0, monitored: 0, ignored: 0 };
     }
 
     // 4. AI triage — let the PM brain decide what's worth building
-    const triaged = await aiTriage(signalPatterns);
+    const triaged = await aiTriage(allPatterns);
 
     // 5. Query existing backlog to avoid duplicates
     const backlogData = await notionFetch(`/databases/${blDbId}/query`, "POST", { page_size: 100 });

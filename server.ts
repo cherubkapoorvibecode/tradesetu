@@ -48,6 +48,7 @@ import {
   handleEventsRequest,
   handleHsClassifyRequest,
   handleAggregateRequest,
+  handleLeadRequest,
 } from "./server/complianceHandler";
 import {
   handleTranslateRequest,
@@ -76,6 +77,7 @@ app.post("/api/product-feedback",  route(handleProductFeedbackRequest));
 app.post("/api/events",            route(handleEventsRequest));
 app.post("/api/hs-classify",       route(handleHsClassifyRequest));
 app.post("/api/aggregate",         route(handleAggregateRequest));
+app.post("/api/lead",              route(handleLeadRequest));
 app.post("/api/sarvam/translate",  route(handleTranslateRequest));
 app.post("/api/sarvam/detect",     route(handleDetectRequest));
 app.post("/api/sarvam/tts",        route(handleTtsRequest));

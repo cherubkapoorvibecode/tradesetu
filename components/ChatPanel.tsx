@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { ComplianceReport, UserInput, ChatMessage, LanguagePreference } from '../types';
 import { sendChatMessage, translateText, detectLanguage } from '../services/claudeService';
 import { useTranslations } from '../hooks/useTranslations';
-import { trackChatMessage } from '../services/analytics';
+import { trackChatMessage, getSessionId } from '../services/analytics';
 
 interface ChatPanelProps {
   report: ComplianceReport;
@@ -150,6 +150,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ report, userInput, onReportUpdate
         conversationHistory: updatedEnglishHistory,
         originalReport: report,
         originalInput: userInput,
+        sessionId: getSessionId(),
       });
 
       // Track English reply in englishHistory

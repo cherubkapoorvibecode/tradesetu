@@ -97,6 +97,7 @@ export interface ChatRequest {
   conversationHistory: ChatMessage[];
   originalReport: ComplianceReport;
   originalInput: UserInput;
+  sessionId?: string;
 }
 
 export interface ChatResponse {
